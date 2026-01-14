@@ -39,6 +39,7 @@ ssize_t vtfs_read(struct file *filp, char __user *buffer, size_t length, loff_t 
 ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, loff_t *offset);
 int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode);
 int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry);
+int vtfs_link(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
 
 struct vtfs_file_info *find_file_info(ino_t ino);
 struct vtfs_file_info *find_file_in_dir(const char *name, ino_t parent_ino);

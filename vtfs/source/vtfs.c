@@ -17,6 +17,7 @@ struct inode_operations vtfs_inode_ops = {
     .unlink = vtfs_unlink,
     .mkdir = vtfs_mkdir,
     .rmdir = vtfs_rmdir,
+    .link = vtfs_link,
 };
 
 struct file_operations vtfs_dir_ops = {
@@ -192,15 +193,27 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
             return -EPERM;
         }
 
-        if(file_info->content.data) {
-            kfree(file_info->content.data);
+        int link_count = 0;
+        struct vtfs_file_info *temp_info;
+        list_for_each_entry(temp_info, &vtfs_files, list) {
+            if(temp_info->ino == file_info->ino) {
+                link_count++;
+            }
         }
+        LOG("Link count for inode %lu is %d\n", file_info->ino, link_count);
 
         list_del(&file_info->list);
-        kfree(file_info);
-        mutex_unlock(&vtfs_files_lock);
-        LOG("Unlinked file '%s'\n", name);
-        return 0;
+
+        if(link_count == 1) {
+            if(file_info->content.data) {
+                kfree(file_info->content.data);
+            }
+            mutex_destroy(&file_info->lock);
+            kfree(file_info);
+            LOG("Unlinked and deleted file '%s'\n", name);
+        } else {
+            LOG("Unlinked file '%s', but not deleted due to existing links\n", name);
+        }
     }
     mutex_unlock(&vtfs_files_lock);
     LOG("File '%s' not found for unlinking\n", name);
@@ -408,14 +421,34 @@ int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry) {
 void vtfs_kill_sb(struct super_block* sb) {
     struct vtfs_file_info* file_info, *tmp;
     LOG("Unmounting VTFS filesystem\n");
-    list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
-        if(file_info->content.data) {
-            kfree(file_info->content.data);
+    
+    bool *processed_inodes = kcalloc(next_ino, sizeof(bool), GFP_KERNEL);
+    
+    if (processed_inodes) {
+        list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
+            if (!processed_inodes[file_info->ino]) {
+                if (file_info->content.data) {
+                    kfree(file_info->content.data);
+                    LOG("Freed data for inode %lu\n", file_info->ino);
+                }
+                processed_inodes[file_info->ino] = true;
+            }
+            mutex_destroy(&file_info->lock);
+            list_del(&file_info->list);
+            kfree(file_info);
         }
-        mutex_destroy(&file_info->lock);
-        list_del(&file_info->list);
-        kfree(file_info);
+        kfree(processed_inodes);
+    } else {
+        list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
+            if (file_info->content.data) {
+                kfree(file_info->content.data);
+            }
+            mutex_destroy(&file_info->lock);
+            list_del(&file_info->list);
+            kfree(file_info);
+        }
     }
+    
     kill_litter_super(sb);
     LOG("VTFS filesystem unmounted\n");
 }
@@ -519,6 +552,76 @@ ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, 
     LOG("Wrote %zu bytes to inode %lu at offset %lld\n", length, inode->i_ino, *offset - length);
     mutex_unlock(&file_info->lock);
     return ret;
+}
+
+int vtfs_link(struct dentry *old_dentry, struct inode *parent_dir, struct dentry *dentry) {
+   const char *new_name = old_dentry->d_name.name;
+   struct inode *old_inode = old_dentry->d_inode;
+   struct vtfs_file_info *old_file_info, *new_file_info;
+
+    LOG("link called for: '%s' to '%s' in directory %lu\n", 
+        old_dentry->d_name.name, new_name, parent_dir->i_ino);
+
+    if(!S_ISREG(old_inode->i_mode)) {
+        LOG("Link failed: only regular files can be linked\n");
+        return -EPERM;
+    }
+
+    mutex_lock(&vtfs_files_lock);
+
+    old_file_info = find_file_info(old_inode->i_ino);
+    if(!old_file_info) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Link failed: original file info not found for inode %lu\n", old_inode->i_ino);
+        return -ENOENT;
+    }
+    if(find_file_in_dir(new_name, parent_dir->i_ino)) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Link failed: target name '%s' already exists in directory %lu\n", 
+            new_name, parent_dir->i_ino);
+        return -EEXIST;
+    }
+
+    new_file_info = kzalloc(sizeof(*new_file_info), GFP_KERNEL);
+    if(!new_file_info) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Link failed: memory allocation error for new link '%s'\n", new_name);
+        return -ENOMEM;
+    }
+    strncpy(new_file_info->name, new_name, sizeof(new_file_info->name)-1);
+    new_file_info->name[sizeof(new_file_info->name)-1] = '\0';
+    new_file_info->ino = old_file_info->ino;
+    new_file_info->parent_ino = parent_dir->i_ino;
+    new_file_info->is_dir = false;
+    new_file_info->content = old_file_info->content;
+    mutex_init(&new_file_info->lock);
+    INIT_LIST_HEAD(&new_file_info->list);
+    list_add(&new_file_info->list, &vtfs_files);
+
+    ihold(old_inode);
+    mutex_unlock(&vtfs_files_lock);
+
+    struct inode* new_inode = vtfs_get_inode(
+        parent_dir->i_sb,
+        NULL,
+        old_inode->i_mode,
+        new_file_info->ino
+    );
+    if(!new_inode) {
+        mutex_lock(&vtfs_files_lock);
+        list_del(&new_file_info->list);
+        kfree(new_file_info);
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Link failed: inode creation error for new link '%s'\n", new_name);
+        return -ENOMEM;
+    }
+    new_inode->i_fop = &vtfs_file_ops;
+    new_inode->i_op = &vtfs_inode_ops;
+    d_instantiate(dentry, new_inode);
+    LOG("Created hard link '%s' to inode %lu in directory %lu\n",
+        new_name, new_file_info->ino, parent_dir->i_ino);
+    return 0;
+
 }
 
 static int __init vtfs_init(void) {
