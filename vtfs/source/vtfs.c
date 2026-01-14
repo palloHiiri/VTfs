@@ -35,10 +35,42 @@ struct inode_operations vtfs_inode_ops = {
 struct file_operations vtfs_dir_ops = {
   .iterate_shared = vtfs_iterate,
 };
+struct file_operations vtfs_file_ops = {
+};
 
 struct dentry* vtfs_lookup(struct inode* parent_inode, 
                           struct dentry* child_dentry, 
                           unsigned int flag){
+  ino_t root = parent_inode->i_ino;
+  const char* name = child_dentry->d_name.name;
+  if(root == 1000 && !strcmp(name, "test.txt")) {
+    struct inode* inode = vtfs_get_inode(
+      parent_inode->i_sb, 
+      parent_inode, 
+      S_IFREG | 0777, 
+      101
+    );
+    if(inode) {
+      inode->i_fop = &vtfs_file_ops;
+      d_add(child_dentry, inode);
+      LOG("Created file inode for %s\n", name);
+    }
+  }else if (!strcmp(name, "dir"))
+  {
+    struct inode* inode = vtfs_get_inode(
+      parent_inode->i_sb, 
+      parent_inode, 
+      S_IFDIR | 0777, 
+      200
+    );
+    if(inode) {
+      inode->i_op = &vtfs_inode_ops;
+      inode->i_fop = &vtfs_dir_ops;
+      d_add(child_dentry, inode);
+      LOG("Created directory inode for %s\n", name);
+    }
+  }
+
   return NULL;
 }
 
