@@ -7,26 +7,17 @@
 #define LOG(fmt, ...) pr_info("[" MODULE_NAME "]: " fmt, ##__VA_ARGS__)
 #define VTFS_ROOT_INO 1000
 
-struct vtfs_file_content {
-    char *data;
-    size_t size;
-    size_t allocated;
-};
-
 struct vtfs_file_info {
     char name[256];
     ino_t ino;
     ino_t parent_ino;
     bool is_dir;
     struct list_head list;
-    struct vtfs_file_content content;
-    struct mutex lock;
 };
 
 extern struct list_head vtfs_files;
 extern int next_ino;
 extern struct mutex vtfs_files_lock;
-extern int file_mask;
 
 struct dentry* vtfs_mount(struct file_system_type* fs_type, int flags, const char* token, void* data);
 void vtfs_kill_sb(struct super_block* sb);
@@ -38,6 +29,8 @@ int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode, struct dent
 int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry);
 ssize_t vtfs_read(struct file *filp, char __user *buffer, size_t length, loff_t *offset);
 ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, loff_t *offset);
+int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode);
+int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry);
 
 struct vtfs_file_info *find_file_info(ino_t ino);
 struct vtfs_file_info *find_file_in_dir(const char *name, ino_t parent_ino);

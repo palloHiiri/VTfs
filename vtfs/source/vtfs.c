@@ -15,6 +15,8 @@ struct inode_operations vtfs_inode_ops = {
     .lookup = vtfs_lookup,
     .create = vtfs_create,
     .unlink = vtfs_unlink,
+    .mkdir = vtfs_mkdir,
+    .rmdir = vtfs_rmdir,
 };
 
 struct file_operations vtfs_dir_ops = {
@@ -70,6 +72,20 @@ struct vtfs_file_info* find_file_in_dir(const char* name, ino_t parent_ino) {
         }
     }
     return NULL;
+}
+
+static bool is_directory_empty(ino_t dir_ino) {
+    struct vtfs_file_info* file_info;
+    
+    list_for_each_entry(file_info, &vtfs_files, list) {
+        if(file_info->parent_ino == dir_ino) {
+            if(strcmp(file_info->name, ".") != 0 && 
+               strcmp(file_info->name, "..") != 0) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 struct dentry* vtfs_lookup(struct inode* parent_inode, 
@@ -161,6 +177,12 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
     mutex_lock(&vtfs_files_lock);
     struct vtfs_file_info *file_info = find_file_in_dir(name, parent_inode->i_ino);
     if (file_info) {
+        if(file_info->is_dir) {
+            mutex_unlock(&vtfs_files_lock);
+            LOG("Cannot unlink directory '%s' with unlink\n", name);
+            return -EPERM;
+        }
+
         list_del(&file_info->list);
         kfree(file_info);
         mutex_unlock(&vtfs_files_lock);
@@ -215,6 +237,11 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
 
     list_for_each_entry(file_info, &vtfs_files, list) {
         if(file_info->parent_ino == ino) {
+            if(strcmp(file_info->name, ".") == 0 || 
+               strcmp(file_info->name, "..") == 0) {
+                continue;
+            }
+            
             if(count == ctx->pos) {
                 unsigned char type = file_info->is_dir ? DT_DIR : DT_REG;
                 if(!dir_emit(ctx, file_info->name, strlen(file_info->name), 
@@ -275,6 +302,89 @@ struct inode* vtfs_get_inode(
     }
 
     return inode;
+}
+
+int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode,
+                 struct dentry *child_dentry, umode_t mode) {
+    const char *name = child_dentry->d_name.name;
+    
+    LOG("mkdir called for: '%s' in directory %lu, mode=%o\n", 
+        name, parent_inode->i_ino, mode);
+
+    mutex_lock(&vtfs_files_lock);
+    
+    if(find_file_in_dir(name, parent_inode->i_ino)) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Directory '%s' already exists\n", name);
+        return -EEXIST;
+    }
+
+    struct vtfs_file_info *new_dir_info = kmalloc(sizeof(*new_dir_info), GFP_KERNEL);
+    if (!new_dir_info) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Memory allocation failed for new directory '%s'\n", name);
+        return -ENOMEM;
+    }
+
+    strncpy(new_dir_info->name, name, sizeof(new_dir_info->name)-1);
+    new_dir_info->name[sizeof(new_dir_info->name)-1] = '\0';
+    new_dir_info->ino = next_ino++;
+    new_dir_info->parent_ino = parent_inode->i_ino;
+    new_dir_info->is_dir = true;
+    INIT_LIST_HEAD(&new_dir_info->list);
+    list_add(&new_dir_info->list, &vtfs_files);
+
+    struct inode* inode = vtfs_get_inode(
+        parent_inode->i_sb,
+        NULL,
+        S_IFDIR | 0777,
+        new_dir_info->ino
+    );
+    if (!inode) {
+        list_del(&new_dir_info->list);
+        kfree(new_dir_info);
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Failed to create inode for new directory '%s'\n", name);
+        return -ENOMEM;
+    }
+    inode->i_fop = &vtfs_dir_ops;
+    inode->i_op = &vtfs_inode_ops;
+    d_add(child_dentry, inode);
+    LOG("Created directory '%s' with inode %lu\n", name, new_dir_info->ino);
+    mutex_unlock(&vtfs_files_lock);
+    return 0;
+}
+
+int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry) {
+    const char *name = child_dentry->d_name.name;
+    
+    LOG("rmdir called for: '%s' in directory %lu\n", 
+        name, parent_inode->i_ino);
+    
+    mutex_lock(&vtfs_files_lock);
+    struct vtfs_file_info *dir_info = find_file_in_dir(name, parent_inode->i_ino);
+    if (dir_info) {
+        if(!dir_info->is_dir) {
+            mutex_unlock(&vtfs_files_lock);
+            LOG("'%s' is not a directory\n", name);
+            return -ENOTDIR;
+        }
+
+        if(!is_directory_empty(dir_info->ino)) {
+            mutex_unlock(&vtfs_files_lock);
+            LOG("Directory '%s' is not empty\n", name);
+            return -ENOTEMPTY;
+        }
+
+        list_del(&dir_info->list);
+        kfree(dir_info);
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Removed directory '%s'\n", name);
+        return 0;
+    }
+    mutex_unlock(&vtfs_files_lock);
+    LOG("Directory '%s' not found for removal\n", name);
+    return -ENOENT;
 }
 
 void vtfs_kill_sb(struct super_block* sb) {
