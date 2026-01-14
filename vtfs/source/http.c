@@ -1,7 +1,14 @@
 #include "http.h"
 
-const char *SERVER_IP = "0.0.0.0";
-const int SERVER_PORT = 8080;
+#include <linux/socket.h>
+#include <linux/kernel.h>
+#include <linux/net.h>
+#include <linux/in.h>
+#include <linux/types.h>
+#include <net/sock.h>
+
+const char *SERVER_IP = "155.212.168.176";
+const int SERVER_PORT = 8089;
 
 // callee should call free_request on received buffer
 int fill_request(struct kvec *vec, const char *token, const char *method,
@@ -98,7 +105,7 @@ int64_t parse_http_response(char *raw_response, size_t raw_response_size,
       printk(KERN_INFO "Received response with content length %d\n", length);
     }
   }
-  ++buffer; // skip last '\n'
+  ++buffer;
 
   if (length == -1) {
     return -6;
