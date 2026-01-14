@@ -24,7 +24,8 @@ struct file_operations vtfs_dir_ops = {
 };
 
 struct file_operations vtfs_file_ops = {
-    
+    .read = vtfs_read,
+    .write = vtfs_write,    
 };
 
 struct file_system_type vtfs_fs_type = {
@@ -46,6 +47,10 @@ static void init_root_directory(void) {
     root_dir->ino = VTFS_ROOT_INO;
     root_dir->parent_ino = VTFS_ROOT_INO;
     root_dir->is_dir = true;
+    root_dir->content.data = NULL;
+    root_dir->content.size = 0;
+    root_dir->content.allocated = 0;
+    mutex_init(&root_dir->lock);
     INIT_LIST_HEAD(&root_dir->list);
     list_add(&root_dir->list, &vtfs_files);
     LOG("Root directory initialized\n");
@@ -144,6 +149,10 @@ int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode,
     new_file_info->ino = next_ino++;
     new_file_info->parent_ino = parent_inode->i_ino;
     new_file_info->is_dir = false;
+    new_file_info->content.data = NULL;
+    new_file_info->content.size = 0;
+    new_file_info->content.allocated = 0;
+    mutex_init(&new_file_info->lock);
     INIT_LIST_HEAD(&new_file_info->list);
     list_add(&new_file_info->list, &vtfs_files);
 
@@ -181,6 +190,10 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
             mutex_unlock(&vtfs_files_lock);
             LOG("Cannot unlink directory '%s' with unlink\n", name);
             return -EPERM;
+        }
+
+        if(file_info->content.data) {
+            kfree(file_info->content.data);
         }
 
         list_del(&file_info->list);
@@ -376,6 +389,11 @@ int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry) {
             return -ENOTEMPTY;
         }
 
+        if(dir_info->content.data) {
+            kfree(dir_info->content.data);
+        }
+        mutex_destroy(&dir_info->lock);
+
         list_del(&dir_info->list);
         kfree(dir_info);
         mutex_unlock(&vtfs_files_lock);
@@ -391,11 +409,116 @@ void vtfs_kill_sb(struct super_block* sb) {
     struct vtfs_file_info* file_info, *tmp;
     LOG("Unmounting VTFS filesystem\n");
     list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
+        if(file_info->content.data) {
+            kfree(file_info->content.data);
+        }
+        mutex_destroy(&file_info->lock);
         list_del(&file_info->list);
         kfree(file_info);
     }
     kill_litter_super(sb);
     LOG("VTFS filesystem unmounted\n");
+}
+
+ssize_t vtfs_read(struct file *filp, char __user *buffer, size_t length, loff_t *offset) {
+    struct inode* inode = filp->f_inode;
+    struct vtfs_file_info* file_info = find_file_info(inode->i_ino);
+    ssize_t ret = -ENOENT;
+
+    if(!file_info) {
+        LOG("Read failed: file info not found for inode %lu\n", inode->i_ino);
+        return ret;
+    }
+    mutex_lock(&file_info->lock);
+
+    if(*offset >= file_info->content.size) {
+        mutex_unlock(&file_info->lock);
+        return 0; 
+    }
+    if (length > file_info->content.size - *offset)
+      length = file_info->content.size - *offset;
+
+    if(length > 0 && file_info->content.data){
+      if(copy_to_user(buffer, file_info->content.data + *offset, length)) {
+        mutex_unlock(&file_info->lock);
+        LOG("Read failed: copy_to_user error for inode %lu\n", inode->i_ino);
+        return -EFAULT;
+    }
+    *offset += length;
+    ret = length;
+    LOG("read %zu bytes from inode %lu at offset %lld\n", length, inode->i_ino, *offset - length);
+    } else {
+        ret = 0;
+    }
+    mutex_unlock(&file_info->lock);
+    return ret;
+}
+
+ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, loff_t *offset) {
+    struct inode* inode = filp->f_inode;
+    struct vtfs_file_info* file_info = find_file_info(inode->i_ino);
+    ssize_t ret = -ENOENT;
+
+    if(!file_info) {
+        LOG("Write failed: file info not found for inode %lu\n", inode->i_ino);
+        return ret;
+    }
+    mutex_lock(&file_info->lock);
+
+    if(*offset + length > file_info->content.allocated){
+      size_t required = *offset + length;
+      size_t new_size = max_t(size_t, file_info->content.allocated * 2, required);
+
+      if(new_size == 0) {
+          new_size = PAGE_SIZE;
+      }
+      char* new_data = krealloc(file_info->content.data, new_size, GFP_KERNEL);
+      if(!new_data) {
+          mutex_unlock(&file_info->lock);
+          LOG("Write failed: memory allocation error for inode %lu\n", inode->i_ino);
+          return -ENOMEM;
+    }
+
+    if(new_size > file_info->content.allocated) {
+        memset(new_data + file_info->content.allocated, 0, new_size - file_info->content.allocated);
+    }
+
+      file_info->content.data = new_data;
+      file_info->content.allocated = new_size;
+      LOG("Reallocated data buffer to %zu bytes for inode %lu\n", new_size, inode->i_ino);
+    }
+
+    char *tmp_buffer = kmalloc(length, GFP_KERNEL);
+    if(!tmp_buffer) {
+        mutex_unlock(&file_info->lock);
+        LOG("Write failed: temporary buffer allocation error for inode %lu\n", inode->i_ino);
+        return -ENOMEM;
+    }
+    if(copy_from_user(tmp_buffer, buffer, length)) {
+        kfree(tmp_buffer);
+        mutex_unlock(&file_info->lock);
+        LOG("Write failed: copy_from_user error for inode %lu\n", inode->i_ino);
+        return -EFAULT;
+    }
+    for(size_t i = 0; i < length; i++) {
+        if((unsigned char)tmp_buffer[i]>127){
+            kfree(tmp_buffer);
+            mutex_unlock(&file_info->lock);
+            LOG("Write failed: non-ASCII character detected for inode %lu\n", inode->i_ino);
+            return -EINVAL;
+        }
+    }
+    memcpy(file_info->content.data + *offset, tmp_buffer, length);
+    kfree(tmp_buffer);
+
+    if(*offset + length > file_info->content.size) {
+        file_info->content.size = *offset + length;
+    }
+    *offset += length;
+    ret = length;
+    LOG("Wrote %zu bytes to inode %lu at offset %lld\n", length, inode->i_ino, *offset - length);
+    mutex_unlock(&file_info->lock);
+    return ret;
 }
 
 static int __init vtfs_init(void) {

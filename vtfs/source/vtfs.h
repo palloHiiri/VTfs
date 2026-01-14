@@ -7,12 +7,20 @@
 #define LOG(fmt, ...) pr_info("[" MODULE_NAME "]: " fmt, ##__VA_ARGS__)
 #define VTFS_ROOT_INO 1000
 
+struct vtfs_file_content {
+    char *data;
+    size_t size;
+    size_t allocated;
+};
+
 struct vtfs_file_info {
     char name[256];
     ino_t ino;
     ino_t parent_ino;
     bool is_dir;
     struct list_head list;
+    struct vtfs_file_content content;
+    struct mutex lock;
 };
 
 extern struct list_head vtfs_files;
