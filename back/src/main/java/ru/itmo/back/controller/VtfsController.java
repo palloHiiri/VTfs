@@ -63,7 +63,7 @@ public class VtfsController {
                         f.getIsDir() ? 1 : 0);
                 return createResponse(0, response.getBytes());
             }
-            return createResponse(-2, null); // ENOENT
+            return createResponse(-2, null);
         } catch (Exception e) {
             log.error("Lookup failed", e);
             return createResponse(-1, null);
@@ -78,7 +78,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> existing = vtfsService.findFileInDir(name, parent_ino, token);
             if (existing.isPresent()) {
-                return createResponse(-17, null); // EEXIST
+                return createResponse(-17, null);
             }
 
             VtfsFile file = vtfsService.createFile(name, parent_ino, token);
@@ -87,7 +87,7 @@ public class VtfsController {
             return createResponse(0, response.getBytes());
         } catch (Exception e) {
             log.error("Create failed", e);
-            return createResponse(-12, null); // ENOMEM
+            return createResponse(-12, null);
         }
     }
 
@@ -99,7 +99,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> existing = vtfsService.findFileInDir(name, parent_ino, token);
             if (existing.isPresent()) {
-                return createResponse(-17, null); // EEXIST
+                return createResponse(-17, null);
             }
 
             VtfsFile dir = vtfsService.createDirectory(name, parent_ino, token);
@@ -108,7 +108,7 @@ public class VtfsController {
             return createResponse(0, response.getBytes());
         } catch (Exception e) {
             log.error("Mkdir failed", e);
-            return createResponse(-12, null); // ENOMEM
+            return createResponse(-12, null);
         }
     }
 
@@ -121,7 +121,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> existing = vtfsService.findFileInDir(name, parent_ino, token);
             if (existing.isPresent()) {
-                return createResponse(-17, null); // EEXIST
+                return createResponse(-17, null);
             }
 
             VtfsFile symlink = vtfsService.createSymlink(name, parent_ino, target, token);
@@ -130,7 +130,7 @@ public class VtfsController {
             return createResponse(0, response.getBytes());
         } catch (Exception e) {
             log.error("Symlink failed", e);
-            return createResponse(-12, null); // ENOMEM
+            return createResponse(-12, null);
         }
     }
 
@@ -145,7 +145,7 @@ public class VtfsController {
                 log.info("Retrieved symlink target: {}", target);
                 return createResponse(0, target.getBytes());
             }
-            return createResponse(-2, null); // ENOENT
+            return createResponse(-2, null);
         } catch (Exception e) {
             log.error("Getlink failed", e);
             return createResponse(-1, null);
@@ -161,7 +161,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileByIno(ino, token);
             if (file.isEmpty() || file.get().getIsDir()) {
-                return createResponse(-22, null); // EINVAL
+                return createResponse(-22, null);
             }
 
             byte[] content = file.get().getContent();
@@ -192,7 +192,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileByIno(ino, token);
             if (file.isEmpty() || file.get().getIsDir()) {
-                return createResponse(-22, null); // EINVAL
+                return createResponse(-22, null);
             }
 
             byte[] currentContent = file.get().getContent();
@@ -216,7 +216,7 @@ public class VtfsController {
             return createResponse(0, response.getBytes());
         } catch (Exception e) {
             log.error("Write failed", e);
-            return createResponse(-12, null); // ENOMEM
+            return createResponse(-12, null);
         }
     }
 
@@ -228,10 +228,10 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileInDir(name, parent_ino, token);
             if (file.isEmpty()) {
-                return createResponse(-2, null); // ENOENT
+                return createResponse(-2, null);
             }
             if (file.get().getIsDir()) {
-                return createResponse(-1, null); // EPERM
+                return createResponse(-1, null);
             }
 
             vtfsService.deleteFile(file.get().getIno(), token);
@@ -251,13 +251,13 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileInDir(name, parent_ino, token);
             if (file.isEmpty()) {
-                return createResponse(-2, null); // ENOENT
+                return createResponse(-2, null);
             }
             if (!file.get().getIsDir()) {
-                return createResponse(-20, null); // ENOTDIR
+                return createResponse(-20, null);
             }
             if (!vtfsService.isDirectoryEmpty(file.get().getIno(), token)) {
-                return createResponse(-39, null); // ENOTEMPTY
+                return createResponse(-39, null);
             }
 
             vtfsService.deleteFile(file.get().getIno(), token);
@@ -304,7 +304,6 @@ public class VtfsController {
                 if (!result.isEmpty()) {
                     result.append("\n");
                 }
-                // Format: ino,parent_ino,name,type,size,symlink_target
                 result.append(f.getIno())
                         .append(",").append(f.getParentIno())
                         .append(",").append(f.getName())
@@ -330,10 +329,9 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileByIno(ino, token);
             if (file.isEmpty() || file.get().getIsDir()) {
-                return createResponse(-22, null); // EINVAL
+                return createResponse(-22, null);
             }
 
-            // Decode hex string to bytes
             byte[] decodedData = new byte[data.length() / 2];
             for (int i = 0; i < data.length(); i += 2) {
                 decodedData[i / 2] = (byte) Integer.parseInt(data.substring(i, i + 2), 16);
@@ -361,7 +359,7 @@ public class VtfsController {
             return createResponse(0, response.getBytes());
         } catch (Exception e) {
             log.error("Write hex failed", e);
-            return createResponse(-12, null); // ENOMEM
+            return createResponse(-12, null);
         }
     }
 
@@ -374,7 +372,7 @@ public class VtfsController {
         try {
             Optional<VtfsFile> file = vtfsService.findFileByIno(ino, token);
             if (file.isEmpty() || file.get().getIsDir()) {
-                return createResponse(-22, null); // EINVAL
+                return createResponse(-22, null);
             }
 
             byte[] content = file.get().getContent();
@@ -384,7 +382,6 @@ public class VtfsController {
 
             long readLength = Math.min(length, content.length - offset);
 
-            // Encode to hex
             StringBuilder hexString = new StringBuilder();
             int offsetInt = Math.toIntExact(offset);
             int readLen = Math.toIntExact(readLength);
