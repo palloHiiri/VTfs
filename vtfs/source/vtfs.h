@@ -18,6 +18,8 @@ struct vtfs_file_info {
     ino_t ino;
     ino_t parent_ino;
     bool is_dir;
+    bool is_symlink;
+    char *symlink_target;
     struct list_head list;
     struct vtfs_file_content content;
     struct mutex lock;
@@ -40,11 +42,14 @@ ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, 
 int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode);
 int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry);
 int vtfs_link(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
+int vtfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname);
+const char *vtfs_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done);
 
 struct vtfs_file_info *find_file_info(ino_t ino);
 struct vtfs_file_info *find_file_in_dir(const char *name, ino_t parent_ino);
 
 extern struct inode_operations vtfs_inode_ops;
+extern struct inode_operations vtfs_symlink_inode_ops;
 extern struct file_operations vtfs_dir_ops;
 extern struct file_operations vtfs_file_ops;
 extern struct file_system_type vtfs_fs_type;

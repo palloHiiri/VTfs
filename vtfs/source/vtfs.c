@@ -18,6 +18,11 @@ struct inode_operations vtfs_inode_ops = {
     .mkdir = vtfs_mkdir,
     .rmdir = vtfs_rmdir,
     .link = vtfs_link,
+    .symlink = vtfs_symlink,
+};
+
+struct inode_operations vtfs_symlink_inode_ops = {
+    .get_link = vtfs_get_link,
 };
 
 struct file_operations vtfs_dir_ops = {
@@ -48,6 +53,8 @@ static void init_root_directory(void) {
     root_dir->ino = VTFS_ROOT_INO;
     root_dir->parent_ino = VTFS_ROOT_INO;
     root_dir->is_dir = true;
+    root_dir->is_symlink = false;
+    root_dir->symlink_target = NULL;
     root_dir->content.data = NULL;
     root_dir->content.size = 0;
     root_dir->content.allocated = 0;
@@ -102,15 +109,32 @@ struct dentry* vtfs_lookup(struct inode* parent_inode,
 
     file_info = find_file_in_dir(name, parent_inode->i_ino);
     if(file_info) {
+        umode_t mode;
+        if(file_info->is_symlink) {
+            mode = S_IFLNK | 0777;
+        } else if(file_info->is_dir) {
+            mode = S_IFDIR | 0777;
+        } else {
+            mode = S_IFREG | 0777;
+        }
+        
         struct inode* inode = vtfs_get_inode(
             parent_inode->i_sb,
             NULL,
-            file_info->is_dir ? S_IFDIR | 0777 : S_IFREG | 0777,
+            mode,
             file_info->ino
         );
         if(inode) {
-            inode->i_fop = file_info->is_dir ? &vtfs_dir_ops : &vtfs_file_ops;
-            inode->i_op = &vtfs_inode_ops;
+            if(file_info->is_symlink) {
+                inode->i_op = &vtfs_symlink_inode_ops;
+                inode->i_link = file_info->symlink_target;
+            } else if(file_info->is_dir) {
+                inode->i_fop = &vtfs_dir_ops;
+                inode->i_op = &vtfs_inode_ops;
+            } else {
+                inode->i_fop = &vtfs_file_ops;
+                inode->i_op = &vtfs_inode_ops;
+            }
             d_add(child_dentry, inode);
             LOG("Lookup successful for '%s' in directory %lu\n", 
                 name, parent_inode->i_ino);
@@ -150,6 +174,8 @@ int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode,
     new_file_info->ino = next_ino++;
     new_file_info->parent_ino = parent_inode->i_ino;
     new_file_info->is_dir = false;
+    new_file_info->is_symlink = false;
+    new_file_info->symlink_target = NULL;
     new_file_info->content.data = NULL;
     new_file_info->content.size = 0;
     new_file_info->content.allocated = 0;
@@ -205,14 +231,21 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
         list_del(&file_info->list);
 
         if(link_count == 1) {
+            if(file_info->symlink_target) {
+                kfree(file_info->symlink_target);
+            }
             if(file_info->content.data) {
                 kfree(file_info->content.data);
             }
             mutex_destroy(&file_info->lock);
             kfree(file_info);
+            mutex_unlock(&vtfs_files_lock);
             LOG("Unlinked and deleted file '%s'\n", name);
+            return 0;
         } else {
+            mutex_unlock(&vtfs_files_lock);
             LOG("Unlinked file '%s', but not deleted due to existing links\n", name);
+            return 0;
         }
     }
     mutex_unlock(&vtfs_files_lock);
@@ -269,7 +302,14 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
             }
             
             if(count == ctx->pos) {
-                unsigned char type = file_info->is_dir ? DT_DIR : DT_REG;
+                unsigned char type;
+                if(file_info->is_symlink) {
+                    type = DT_LNK;
+                } else if(file_info->is_dir) {
+                    type = DT_DIR;
+                } else {
+                    type = DT_REG;
+                }
                 if(!dir_emit(ctx, file_info->name, strlen(file_info->name), 
                            file_info->ino, type)) {
                     return 0;
@@ -321,6 +361,8 @@ struct inode* vtfs_get_inode(
         if(S_ISDIR(mode)) {
             inode->i_fop = &vtfs_dir_ops;
             inode->i_op = &vtfs_inode_ops;
+        } else if(S_ISLNK(mode)) {
+            inode->i_op = &vtfs_symlink_inode_ops;
         } else {
             inode->i_fop = &vtfs_file_ops;
             inode->i_op = &vtfs_inode_ops;
@@ -357,6 +399,8 @@ int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode,
     new_dir_info->ino = next_ino++;
     new_dir_info->parent_ino = parent_inode->i_ino;
     new_dir_info->is_dir = true;
+    new_dir_info->is_symlink = false;
+    new_dir_info->symlink_target = NULL;
     INIT_LIST_HEAD(&new_dir_info->list);
     list_add(&new_dir_info->list, &vtfs_files);
 
@@ -422,31 +466,16 @@ void vtfs_kill_sb(struct super_block* sb) {
     struct vtfs_file_info* file_info, *tmp;
     LOG("Unmounting VTFS filesystem\n");
     
-    bool *processed_inodes = kcalloc(next_ino, sizeof(bool), GFP_KERNEL);
-    
-    if (processed_inodes) {
-        list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
-            if (!processed_inodes[file_info->ino]) {
-                if (file_info->content.data) {
-                    kfree(file_info->content.data);
-                    LOG("Freed data for inode %lu\n", file_info->ino);
-                }
-                processed_inodes[file_info->ino] = true;
-            }
-            mutex_destroy(&file_info->lock);
-            list_del(&file_info->list);
-            kfree(file_info);
+    list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
+        list_del(&file_info->list);
+        
+        if (file_info->symlink_target) {
+            kfree(file_info->symlink_target);
         }
-        kfree(processed_inodes);
-    } else {
-        list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
-            if (file_info->content.data) {
-                kfree(file_info->content.data);
-            }
-            mutex_destroy(&file_info->lock);
-            list_del(&file_info->list);
-            kfree(file_info);
+        if (file_info->content.data) {
+            kfree(file_info->content.data);
         }
+        kfree(file_info);
     }
     
     kill_litter_super(sb);
@@ -622,6 +651,101 @@ int vtfs_link(struct dentry *old_dentry, struct inode *parent_dir, struct dentry
         new_name, new_file_info->ino, parent_dir->i_ino);
     return 0;
 
+}
+
+int vtfs_symlink(struct mnt_idmap *idmap, struct inode *dir, 
+                 struct dentry *dentry, const char *symname) {
+    const char *name = dentry->d_name.name;
+    
+    LOG("symlink called: '%s' -> '%s' in directory %lu\n", 
+        name, symname, dir->i_ino);
+
+    mutex_lock(&vtfs_files_lock);
+    
+    if(find_file_in_dir(name, dir->i_ino)) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Symlink failed: '%s' already exists\n", name);
+        return -EEXIST;
+    }
+
+    struct vtfs_file_info *new_symlink = kmalloc(sizeof(*new_symlink), GFP_KERNEL);
+    if (!new_symlink) {
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Symlink failed: memory allocation error for '%s'\n", name);
+        return -ENOMEM;
+    }
+
+    size_t target_len = strlen(symname) + 1;
+    new_symlink->symlink_target = kmalloc(target_len, GFP_KERNEL);
+    if (!new_symlink->symlink_target) {
+        kfree(new_symlink);
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Symlink failed: memory allocation error for target '%s'\n", symname);
+        return -ENOMEM;
+    }
+    strcpy(new_symlink->symlink_target, symname);
+
+    strncpy(new_symlink->name, name, sizeof(new_symlink->name)-1);
+    new_symlink->name[sizeof(new_symlink->name)-1] = '\0';
+    new_symlink->ino = next_ino++;
+    new_symlink->parent_ino = dir->i_ino;
+    new_symlink->is_dir = false;
+    new_symlink->is_symlink = true;
+    new_symlink->content.data = NULL;
+    new_symlink->content.size = 0;
+    new_symlink->content.allocated = 0;
+    mutex_init(&new_symlink->lock);
+    INIT_LIST_HEAD(&new_symlink->list);
+    list_add(&new_symlink->list, &vtfs_files);
+
+    struct inode* inode = vtfs_get_inode(
+        dir->i_sb,
+        NULL,
+        S_IFLNK | 0777,
+        new_symlink->ino
+    );
+    if (!inode) {
+        list_del(&new_symlink->list);
+        kfree(new_symlink->symlink_target);
+        kfree(new_symlink);
+        mutex_unlock(&vtfs_files_lock);
+        LOG("Symlink failed: inode creation error for '%s'\n", name);
+        return -ENOMEM;
+    }
+    
+    inode->i_op = &vtfs_symlink_inode_ops;
+    inode->i_link = new_symlink->symlink_target;
+    inode->i_size = strlen(symname);
+    
+    d_add(dentry, inode);
+    mutex_unlock(&vtfs_files_lock);
+    
+    LOG("Created symlink '%s' -> '%s' with inode %lu\n", 
+        name, symname, new_symlink->ino);
+    return 0;
+}
+
+const char *vtfs_get_link(struct dentry *dentry, struct inode *inode, 
+                          struct delayed_call *done) {
+    if (!inode) {
+        return ERR_PTR(-ECHILD);
+    }
+    
+    LOG("get_link called for inode %lu\n", inode->i_ino);
+    
+    if (inode->i_link) {
+        LOG("Returning link target: %s\n", inode->i_link);
+        return inode->i_link;
+    }
+    
+    struct vtfs_file_info *file_info = find_file_info(inode->i_ino);
+    if (file_info && file_info->is_symlink && file_info->symlink_target) {
+        LOG("Found symlink target from file_info: %s\n", file_info->symlink_target);
+        return file_info->symlink_target;
+    }
+    
+    LOG("get_link failed: no target found for inode %lu\n", inode->i_ino);
+    return ERR_PTR(-ENOENT);
 }
 
 static int __init vtfs_init(void) {
