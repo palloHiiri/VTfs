@@ -80,7 +80,7 @@ static int vtfs_http_rmdir(const char *name, ino_t parent_ino) {
 }
 
 static int vtfs_load_files_from_db(void) {
-    char *response_buffer = kmalloc(32768, GFP_KERNEL); // 32KB buffer
+    char *response_buffer = kmalloc(32768, GFP_KERNEL); 
     if (!response_buffer) {
         return -ENOMEM;
     }
@@ -92,7 +92,6 @@ static int vtfs_load_files_from_db(void) {
         return (int)result;
     }
     
-    // Parse response: each line is "ino,parent_ino,name,type,size,symlink_target"
     char *line = response_buffer;
     char *next_line;
     int loaded_count = 0;
@@ -110,7 +109,6 @@ static int vtfs_load_files_from_db(void) {
             continue;
         }
         
-        // Parse fields using strsep (kernel-compatible)
         char *ptr = line;
         char *ino_str = strsep(&ptr, ",");
         char *parent_ino_str = strsep(&ptr, ",");
@@ -130,13 +128,11 @@ static int vtfs_load_files_from_db(void) {
             continue;
         }
         
-        // Skip root directory (already created)
         if (ino == VTFS_ROOT_INO) {
             line = next_line;
             continue;
         }
         
-        // Create file info structure
         struct vtfs_file_info *file_info = kzalloc(sizeof(*file_info), GFP_KERNEL);
         if (!file_info) {
             LOG("Failed to allocate memory for file %s\n", name);
@@ -151,42 +147,22 @@ static int vtfs_load_files_from_db(void) {
         file_info->is_dir = (type_str[0] == 'd');
         file_info->is_symlink = (type_str[0] == 'l');
         
-        // Load file content from server for regular files
         if (!file_info->is_dir && !file_info->is_symlink && size_str && strlen(size_str) > 0) {
             unsigned long content_size;
             if (kstrtoul(size_str, 10, &content_size) == 0 && content_size > 0 && content_size < 4096) {
-                char read_buffer[8192]; // 4KB data = 8KB hex
+                char read_buffer[4096];
                 char ino_str_read[32];
-                char size_str_read[32];
                 sprintf(ino_str_read, "%lu", ino);
-                sprintf(size_str_read, "%lu", content_size);
                 
-                int64_t read_result = vtfs_http_call(vtfs_token, "readhex", read_buffer, sizeof(read_buffer),
-                                                      3, "ino", ino_str_read, "offset", "0", "length", size_str_read);
+                int64_t read_result = vtfs_http_call(vtfs_token, "read", read_buffer, sizeof(read_buffer),
+                                                      3, "ino", ino_str_read, "offset", "0", "length", size_str);
                 if (read_result == 0 && strlen(read_buffer) > 0) {
-                    // Decode hex to binary
-                    size_t hex_len = strlen(read_buffer);
-                    size_t data_len = hex_len / 2;
-                    
-                    if (data_len > 0 && data_len <= content_size) {
-                        file_info->content.data = kmalloc(data_len, GFP_KERNEL);
-                        if (file_info->content.data) {
-                            // Decode hex string
-                            for (size_t i = 0; i < data_len; i++) {
-                                char hex_byte[3] = {read_buffer[i*2], read_buffer[i*2+1], '\0'};
-                                unsigned int byte_val;
-                                if (kstrtouint(hex_byte, 16, &byte_val) == 0) {
-                                    file_info->content.data[i] = (char)byte_val;
-                                }
-                            }
-                            file_info->content.size = data_len;
-                            file_info->content.allocated = data_len;
-                            LOG("Loaded %zu bytes of content for file %s (hex-decoded)\n", data_len, name);
-                        }
-                    } else {
-                        file_info->content.data = NULL;
-                        file_info->content.size = 0;
-                        file_info->content.allocated = 0;
+                    file_info->content.data = kmalloc(content_size, GFP_KERNEL);
+                    if (file_info->content.data) {
+                        memcpy(file_info->content.data, read_buffer, content_size);
+                        file_info->content.size = content_size;
+                        file_info->content.allocated = content_size;
+                        LOG("Loaded %lu bytes of content for file %s\n", content_size, name);
                     }
                 } else {
                     file_info->content.data = NULL;
@@ -222,7 +198,6 @@ static int vtfs_load_files_from_db(void) {
         line = next_line;
     }
     
-    // Update next_ino to avoid conflicts
     if (max_ino >= next_ino) {
         next_ino = max_ino + 1;
     }
@@ -427,7 +402,6 @@ int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode,
     INIT_LIST_HEAD(&new_file_info->list);
     list_add(&new_file_info->list, &vtfs_files);
     
-    // Sync with backend server
     int http_result = vtfs_http_create(name, parent_inode->i_ino);
     if (http_result != 0) {
         LOG("Warning: Failed to sync file creation to server: %d\n", http_result);
@@ -481,7 +455,6 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
         list_del(&file_info->list);
 
         if(link_count == 1) {
-            // Sync deletion with backend server
             int http_result = vtfs_http_unlink(name, parent_inode->i_ino);
             if (http_result != 0) {
                 LOG("Warning: Failed to sync file deletion to server: %d\n", http_result);
@@ -522,7 +495,6 @@ struct dentry* vtfs_mount(struct file_system_type *fs_type,
         LOG("Failed to initialize filesystem on server: %lld\n", result);
     }
     
-    // Load existing files from database
     int load_result = vtfs_load_files_from_db();
     if (load_result != 0) {
         LOG("Warning: Failed to load files from database: %d\n", load_result);
@@ -676,7 +648,6 @@ int vtfs_mkdir(struct mnt_idmap *idmap, struct inode *parent_inode,
     INIT_LIST_HEAD(&new_dir_info->list);
     list_add(&new_dir_info->list, &vtfs_files);
     
-    // Sync with backend server
     int http_result = vtfs_http_mkdir(name, parent_inode->i_ino);
     if (http_result != 0) {
         LOG("Warning: Failed to sync directory creation to server: %d\n", http_result);
@@ -724,7 +695,6 @@ int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry) {
             return -ENOTEMPTY;
         }
 
-        // Sync deletion with backend server
         int http_result = vtfs_http_rmdir(name, parent_inode->i_ino);
         if (http_result != 0) {
             LOG("Warning: Failed to sync directory deletion to server: %d\n", http_result);
@@ -849,7 +819,6 @@ ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, 
     ret = length;
     LOG("Wrote %zu bytes to inode %lu at offset %lld\n", length, inode->i_ino, *offset - length);
     
-    // Sync content to server using hex encoding (for files < 500 bytes)
     if (file_info->content.size > 0 && file_info->content.size < 500) {
         char *hex_data = kmalloc(file_info->content.size * 2 + 1, GFP_KERNEL);
         if (hex_data) {

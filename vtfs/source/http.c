@@ -15,10 +15,8 @@
 const char *SERVER_IP = "10.0.2.2";
 const int SERVER_PORT = 8089;
 
-// callee should call free_request on received buffer
 int fill_request(struct kvec *vec, const char *token, const char *method,
                  size_t arg_size, va_list args) {
-  // 2048 bytes for URL and 64 bytes for anything else
   char *request_buffer = kzalloc(2048 + 64, GFP_KERNEL);
   const char *http_verb = "GET";
 
@@ -26,7 +24,6 @@ int fill_request(struct kvec *vec, const char *token, const char *method,
     return -ENOMEM;
   }
 
-  // Use HTTP verb expected by the Spring controller
   if (strcmp(method, "create") == 0 || strcmp(method, "mkdir") == 0 ||
       strcmp(method, "write") == 0 || strcmp(method, "writehex") == 0 || 
       strcmp(method, "symlink") == 0) {
