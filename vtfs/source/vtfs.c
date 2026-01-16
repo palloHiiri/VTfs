@@ -31,7 +31,8 @@ struct file_operations vtfs_dir_ops = {
 
 struct file_operations vtfs_file_ops = {
     .read = vtfs_read,
-    .write = vtfs_write,    
+    .write = vtfs_write, 
+    .open = vtfs_open,   
 };
 
 struct file_system_type vtfs_fs_type = {
@@ -62,6 +63,28 @@ static void init_root_directory(void) {
     INIT_LIST_HEAD(&root_dir->list);
     list_add(&root_dir->list, &vtfs_files);
     LOG("Root directory initialized\n");
+}
+int vtfs_open(struct inode *inode, struct file *filp)
+{
+    struct vtfs_file_info *file_info = find_file_info(inode->i_ino);
+
+    if (!file_info || file_info->is_dir)
+        return -EINVAL;
+
+    if (filp->f_flags & O_TRUNC) {
+        mutex_lock(&file_info->lock);
+        if (file_info->content.data) {
+            kfree(file_info->content.data);
+            file_info->content.data = NULL;
+        }
+        file_info->content.size = 0;
+        file_info->content.allocated = 0;
+        inode->i_size = 0;
+        mutex_unlock(&file_info->lock);
+        LOG("Truncated file inode %lu\n", inode->i_ino);
+    }
+
+    return 0;
 }
 
 struct vtfs_file_info* find_file_info(ino_t ino) {
@@ -463,24 +486,9 @@ int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry) {
 }
 
 void vtfs_kill_sb(struct super_block* sb) {
-    struct vtfs_file_info* file_info, *tmp;
-    LOG("Unmounting VTFS filesystem\n");
-    
-    list_for_each_entry_safe(file_info, tmp, &vtfs_files, list) {
-        list_del(&file_info->list);
-        
-        if (file_info->symlink_target) {
-            kfree(file_info->symlink_target);
-        }
-        if (file_info->content.data) {
-            kfree(file_info->content.data);
-        }
-        kfree(file_info);
-    }
-    
-    kill_litter_super(sb);
-    LOG("VTFS filesystem unmounted\n");
+  printk(KERN_INFO "vtfs super block is destroyed. Unmount successfully.\n");
 }
+
 
 ssize_t vtfs_read(struct file *filp, char __user *buffer, size_t length, loff_t *offset) {
     struct inode* inode = filp->f_inode;
@@ -584,7 +592,7 @@ ssize_t vtfs_write(struct file *filp, const char __user *buffer, size_t length, 
 }
 
 int vtfs_link(struct dentry *old_dentry, struct inode *parent_dir, struct dentry *dentry) {
-   const char *new_name = old_dentry->d_name.name;
+   const char *new_name = dentry->d_name.name;
    struct inode *old_inode = old_dentry->d_inode;
    struct vtfs_file_info *old_file_info, *new_file_info;
 

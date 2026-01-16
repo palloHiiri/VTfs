@@ -44,6 +44,7 @@ int vtfs_rmdir(struct inode *parent_inode, struct dentry *child_dentry);
 int vtfs_link(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
 int vtfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname);
 const char *vtfs_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done);
+int vtfs_open(struct inode *inode, struct file *filp);
 
 struct vtfs_file_info *find_file_info(ino_t ino);
 struct vtfs_file_info *find_file_in_dir(const char *name, ino_t parent_ino);
