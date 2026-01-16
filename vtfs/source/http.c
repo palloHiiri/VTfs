@@ -1,13 +1,18 @@
 #include "http.h"
 
-#include <linux/socket.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/errno.h>
+#include <linux/uio.h>
+
 #include <linux/net.h>
 #include <linux/in.h>
-#include <linux/types.h>
+#include <linux/socket.h>
 #include <net/sock.h>
 
-const char *SERVER_IP = "155.212.168.176";
+const char *SERVER_IP = "10.0.2.2";
 const int SERVER_PORT = 8089;
 
 // callee should call free_request on received buffer
@@ -15,11 +20,23 @@ int fill_request(struct kvec *vec, const char *token, const char *method,
                  size_t arg_size, va_list args) {
   // 2048 bytes for URL and 64 bytes for anything else
   char *request_buffer = kzalloc(2048 + 64, GFP_KERNEL);
+  const char *http_verb = "GET";
+
   if (request_buffer == 0) {
     return -ENOMEM;
   }
 
-  strcpy(request_buffer, "GET /api/");
+  // Use HTTP verb expected by the Spring controller
+  if (strcmp(method, "create") == 0 || strcmp(method, "mkdir") == 0 ||
+      strcmp(method, "write") == 0 || strcmp(method, "writehex") == 0 || 
+      strcmp(method, "symlink") == 0) {
+    http_verb = "POST";
+  } else if (strcmp(method, "unlink") == 0 || strcmp(method, "rmdir") == 0) {
+    http_verb = "DELETE";
+  }
+
+  strcpy(request_buffer, http_verb);
+  strcat(request_buffer, " /api/");
   strcat(request_buffer, method);
 
   strcat(request_buffer, "?token=");
