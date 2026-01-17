@@ -21,5 +21,8 @@ public interface VtfsFileRepository extends JpaRepository<VtfsFile, Long> {
 
     List<VtfsFile> findByParentInoAndTokenAndIsDir(Long parentIno, String token, Boolean isDir);
     List<VtfsFile> findByToken(String token);
+
+    @Query("SELECT COUNT(f) FROM VtfsFile f WHERE f.ino = ?1 AND f.token = ?2")
+    long countLinksByInoAndToken(Long ino, String token);
 }
 

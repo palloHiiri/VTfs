@@ -337,23 +337,26 @@ public class VtfsController {
                 decodedData[i / 2] = (byte) Integer.parseInt(data.substring(i, i + 2), 16);
             }
 
-            byte[] currentContent = file.get().getContent();
             byte[] newContent;
 
-            if (currentContent == null) {
-                int newSize = Math.toIntExact(offset + decodedData.length);
-                newContent = new byte[newSize];
+            if (offset == 0) {
+                newContent = decodedData;
             } else {
-                long maxSize = Math.max(currentContent.length, offset + decodedData.length);
-                int newSize = Math.toIntExact(maxSize);
-                newContent = new byte[newSize];
-                System.arraycopy(currentContent, 0, newContent, 0, currentContent.length);
+                byte[] currentContent = file.get().getContent();
+                if (currentContent == null) {
+                    int newSize = Math.toIntExact(offset + decodedData.length);
+                    newContent = new byte[newSize];
+                } else {
+                    long maxSize = Math.max(currentContent.length, offset + decodedData.length);
+                    int newSize = Math.toIntExact(maxSize);
+                    newContent = new byte[newSize];
+                    System.arraycopy(currentContent, 0, newContent, 0, currentContent.length);
+                }
+                int offsetInt = Math.toIntExact(offset);
+                System.arraycopy(decodedData, 0, newContent, offsetInt, decodedData.length);
             }
 
-            int offsetInt = Math.toIntExact(offset);
-            System.arraycopy(decodedData, 0, newContent, offsetInt, decodedData.length);
             vtfsService.updateFileContent(ino, newContent, token);
-
             String response = String.valueOf(decodedData.length);
             log.info("Wrote {} bytes (hex-decoded) to inode {} at offset {}", decodedData.length, ino, offset);
             return createResponse(0, response.getBytes());
@@ -363,37 +366,34 @@ public class VtfsController {
         }
     }
 
-    @GetMapping("/readhex")
-    public ResponseEntity<byte[]> readhex(
+    @PostMapping("/link")
+    public ResponseEntity<byte[]> link(
             @RequestParam String token,
-            @RequestParam Long ino,
-            @RequestParam Long offset,
-            @RequestParam Long length) {
+            @RequestParam String name,
+            @RequestParam Long parent_ino,
+            @RequestParam Long target_ino) {
         try {
-            Optional<VtfsFile> file = vtfsService.findFileByIno(ino, token);
-            if (file.isEmpty() || file.get().getIsDir()) {
-                return createResponse(-22, null);
+            Optional<VtfsFile> existing = vtfsService.findFileInDir(name, parent_ino, token);
+            if (existing.isPresent()) {
+                return createResponse(-17, null);
             }
 
-            byte[] content = file.get().getContent();
-            if (content == null || offset >= content.length) {
-                return createResponse(0, "".getBytes());
+            Optional<VtfsFile> target = vtfsService.findFileByIno(target_ino, token);
+            if (target.isEmpty()) {
+                return createResponse(-2, null);
             }
 
-            long readLength = Math.min(length, content.length - offset);
-
-            StringBuilder hexString = new StringBuilder();
-            int offsetInt = Math.toIntExact(offset);
-            int readLen = Math.toIntExact(readLength);
-            for (int i = offsetInt; i < offsetInt + readLen; i++) {
-                hexString.append(String.format("%02x", content[i]));
+            if (target.get().getIsDir()) {
+                return createResponse(-1, null);
             }
 
-            log.info("Read {} bytes (hex-encoded) from inode {} at offset {}", readLength, ino, offset);
-            return createResponse(0, hexString.toString().getBytes());
+            VtfsFile hardlink = vtfsService.createHardlink(name, parent_ino, target_ino, token);
+            String response = String.valueOf(hardlink.getIno());
+            log.info("Created hardlink: {} -> inode {} with ino: {}", name, target_ino, hardlink.getIno());
+            return createResponse(0, response.getBytes());
         } catch (Exception e) {
-            log.error("Read hex failed", e);
-            return createResponse(-1, null);
+            log.error("Link failed", e);
+            return createResponse(-12, null);
         }
     }
 

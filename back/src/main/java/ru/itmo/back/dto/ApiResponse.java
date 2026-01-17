@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 @Data
 @NoArgsConstructor
@@ -15,18 +17,15 @@ public class ApiResponse {
     private byte[] data;
 
     public byte[] toByteArray() {
-        byte[] statusBytes = new byte[8];
-        for (int i = 0; i < 8; i++) {
-            statusBytes[i] = (byte) ((statusCode >>> (i * 8)) & 0xFF);
+        ByteBuffer buffer = ByteBuffer.allocate(8 + (data != null ? data.length : 0));
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+
+        buffer.putLong((long) statusCode);
+
+        if (data != null && data.length > 0) {
+            buffer.put(data);
         }
 
-        if (data == null || data.length == 0) {
-            return statusBytes;
-        }
-
-        byte[] result = new byte[8 + data.length];
-        System.arraycopy(statusBytes, 0, result, 0, 8);
-        System.arraycopy(data, 0, result, 8, data.length);
-        return result;
+        return buffer.array();
     }
 }

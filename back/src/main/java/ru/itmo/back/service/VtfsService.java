@@ -122,5 +122,40 @@ public class VtfsService {
     public List<VtfsFile> getAllFiles(String token) {
         return fileRepository.findByToken(token);
     }
+
+    public VtfsFile createHardlink(String name, Long parentIno, Long targetIno, String token) {
+        Optional<VtfsFile> targetFile = fileRepository.findByInoAndToken(targetIno, token);
+        if (targetFile.isEmpty()) {
+            throw new RuntimeException("Target file not found");
+        }
+
+        VtfsFile original = targetFile.get();
+
+        if (original.getIsDir()) {
+            throw new RuntimeException("Cannot create hardlink to directory");
+        }
+
+        Optional<VtfsFile> existing = fileRepository.findByNameAndParentInoAndToken(name, parentIno, token);
+        if (existing.isPresent()) {
+            throw new RuntimeException("File with this name already exists");
+        }
+
+        VtfsFile hardlink = VtfsFile.builder()
+                .ino(targetIno)
+                .parentIno(parentIno)
+                .name(name)
+                .isDir(false)
+                .isSymlink(false)
+                .content(original.getContent())
+                .contentSize(original.getContentSize())
+                .token(token)
+                .build();
+
+        return fileRepository.save(hardlink);
+    }
+
+    public long getLinkCount(Long ino, String token) {
+        return fileRepository.countLinksByInoAndToken(ino, token);
+    }
 }
 
