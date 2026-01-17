@@ -12,9 +12,9 @@ MODULE_DESCRIPTION("A simple FS kernel module with RAM storage");
 LIST_HEAD(vtfs_files);
 int next_ino = 1001;
 DEFINE_MUTEX(vtfs_files_lock);
-static char vtfs_token[256] = {0};
+char vtfs_token[256] = {0};
 
-static int vtfs_http_lookup(const char *name, ino_t parent_ino) {
+int vtfs_http_lookup(const char *name, ino_t parent_ino) {
     char response_buffer[512];
     char parent_ino_str[32];
     char encoded_name[256];
@@ -27,7 +27,7 @@ static int vtfs_http_lookup(const char *name, ino_t parent_ino) {
     return (int)result;
 }
 
-static int vtfs_http_create(const char *name, ino_t parent_ino) {
+int vtfs_http_create(const char *name, ino_t parent_ino) {
     char response_buffer[128];
     char parent_ino_str[32];
     char encoded_name[256];
@@ -40,7 +40,7 @@ static int vtfs_http_create(const char *name, ino_t parent_ino) {
     return (int)result;
 }
 
-static int vtfs_http_mkdir(const char *name, ino_t parent_ino) {
+int vtfs_http_mkdir(const char *name, ino_t parent_ino) {
     char response_buffer[128];
     char parent_ino_str[32];
     char encoded_name[256];
@@ -53,7 +53,7 @@ static int vtfs_http_mkdir(const char *name, ino_t parent_ino) {
     return (int)result;
 }
 
-static int vtfs_http_unlink(const char *name, ino_t parent_ino) {
+int vtfs_http_unlink(const char *name, ino_t parent_ino) {
     char response_buffer[64];
     char parent_ino_str[32];
     char encoded_name[256];
@@ -66,7 +66,7 @@ static int vtfs_http_unlink(const char *name, ino_t parent_ino) {
     return (int)result;
 }
 
-static int vtfs_http_rmdir(const char *name, ino_t parent_ino) {
+int vtfs_http_rmdir(const char *name, ino_t parent_ino) {
     char response_buffer[64];
     char parent_ino_str[32];
     char encoded_name[256];
@@ -79,7 +79,7 @@ static int vtfs_http_rmdir(const char *name, ino_t parent_ino) {
     return (int)result;
 }
 
-static int vtfs_load_files_from_db(void) {
+int vtfs_load_files_from_db(void) {
     char *response_buffer = kmalloc(32768, GFP_KERNEL); 
     if (!response_buffer) {
         return -ENOMEM;
@@ -232,14 +232,12 @@ struct file_operations vtfs_file_ops = {
 };
 
 struct file_system_type vtfs_fs_type = {
-    .owner = THIS_MODULE,
     .name = "vtfs",
     .mount = vtfs_mount,
     .kill_sb = vtfs_kill_sb,
-    .fs_flags = FS_USERNS_MOUNT,
 };
 
-static void init_root_directory(void) {
+void init_root_directory(void) {
     struct vtfs_file_info* root_dir = kmalloc(sizeof(*root_dir), GFP_KERNEL);
     if(!root_dir) {
         LOG("Failed to allocate memory for root directory\n");
@@ -306,7 +304,7 @@ struct vtfs_file_info* find_file_in_dir(const char* name, ino_t parent_ino) {
     return NULL;
 }
 
-static bool is_directory_empty(ino_t dir_ino) {
+bool is_directory_empty(ino_t dir_ino) {
     struct vtfs_file_info* file_info;
     
     list_for_each_entry(file_info, &vtfs_files, list) {
@@ -889,6 +887,7 @@ int vtfs_link(struct dentry *old_dentry, struct inode *parent_dir, struct dentry
     new_file_info->ino = old_file_info->ino;
     new_file_info->parent_ino = parent_dir->i_ino;
     new_file_info->is_dir = false;
+    new_file_info->is_symlink = false;
     new_file_info->content = old_file_info->content;
     mutex_init(&new_file_info->lock);
     INIT_LIST_HEAD(&new_file_info->list);

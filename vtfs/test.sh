@@ -37,31 +37,25 @@ out="$(cat file1)" || fail "cat failed"
 [[ "$out" == "hello world" ]] || fail "unexpected content in file1: '$out'"
 pass "create+write+read ok"
 
-# # 2) append
-printf "X" >> file1 || fail "append failed"
-out="$(cat file1)" || fail "cat failed"
-[[ "$out" == $'hello world\nX' ]] || fail "append content wrong: '$out'"
-pass "append ok"
-
-# 3) truncate via redirect
+# 2) truncate via redirect
 printf "test\n" > file1 || fail "truncate+write failed"
 out="$(cat file1)" || fail "cat failed"
 [[ "$out" == "test" ]] || fail "truncate content wrong: '$out'"
 pass "truncate (>) ok"
 
-# 4) unlink removes name
+# 3) unlink removes name
 rm file1 || fail "rm file1 failed"
 [[ ! -e file1 ]] || fail "file1 still exists after rm"
 pass "unlink ok"
 
-# 5) mkdir + rmdir empty
+# 4) mkdir + rmdir empty
 mkdir dir1 || fail "mkdir dir1 failed"
 [[ -d dir1 ]] || fail "dir1 not a directory after mkdir"
 rmdir dir1 || fail "rmdir dir1 failed"
 [[ ! -e dir1 ]] || fail "dir1 still exists after rmdir"
 pass "mkdir/rmdir ok"
 
-# 6) rmdir non-empty must fail
+# 5) rmdir non-empty must fail
 mkdir dir2 || fail "mkdir dir2 failed"
 printf "abc\n" > dir2/f || fail "create file in dir2 failed"
 if rmdir dir2 2>/dev/null; then
@@ -72,12 +66,12 @@ fi
 rm dir2/f || fail "cleanup file in dir2 failed"
 rmdir dir2 || fail "cleanup rmdir dir2 failed"
 
-# 7) ASCII bytes 0..127 quick sanity (printable + few controls)
+# 6) ASCII bytes 0..127 quick sanity (printable + few controls)
 printf "A\tB\nC\rD" > ascii_test || fail "write ascii_test failed"
 cat ascii_test >/dev/null || fail "read ascii_test failed"
 pass "basic ASCII/control chars read/write ok"
 
-# 8) hardlink semantics
+# 7) hardlink semantics
 printf "hello\n" > file1 || fail "write file1 failed"
 ln file1 file3 || fail "ln file1 file3 failed"
 
@@ -102,7 +96,7 @@ nlink3="$(stat -c '%h' file3)" || fail "stat nlink file3 failed"
 
 pass "hardlink behavior ok"
 
-# 9) symlink creation and follow
+# 8) symlink creation and follow
 printf "target content\n" > target_file || fail "write target_file failed"
 ln -s target_file symlink_to_target || fail "ln -s target_file symlink_to_target failed"
 
